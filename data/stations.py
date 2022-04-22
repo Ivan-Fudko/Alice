@@ -14,7 +14,7 @@ class Station(SqlAlchemyBase):
     refueling = sqlalchemy.Column(sqlalchemy.Boolean, default=True)
     reload = sqlalchemy.Column(sqlalchemy.Boolean, default=True)
     repair = sqlalchemy.Column(sqlalchemy.Boolean, default=True)
-    range_to_system = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
+    services = sqlalchemy.Column(sqlalchemy.String, nullable=False)
 
     system = orm.relation("System")
 

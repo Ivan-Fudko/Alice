@@ -12,5 +12,6 @@ class System(SqlAlchemyBase):
     cord_x = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
     cord_y = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
     cord_z = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
+    range_to_system = sqlalchemy.Column(sqlalchemy.String, nullable=True)
 
     stations = orm.relation("Station", back_populates='system')
