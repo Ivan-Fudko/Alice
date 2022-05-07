@@ -5,6 +5,7 @@ import json
 from data import db_session
 from data.stations import Station
 from data.systems import System
+from data.jaro import jaro_winkler
 
 
 app = Flask(__name__)
@@ -15,9 +16,6 @@ db_sess = db_session.create_session()
 
 
 logging.basicConfig(level=logging.INFO)
-t = 0
-pilot_sistem = 0
-services = []
 
 sessionStorage = {}
 
@@ -43,7 +41,6 @@ def main():
 
 def handle_dialog(req, res):
     user_id = req['session']['user_id']
-    global t, pilot_sistem, services
     if req['session']['new']:
 
         sessionStorage[user_id] = {
@@ -53,35 +50,44 @@ def handle_dialog(req, res):
                 'Рынок',
                 'Пополнение боезапаса',
                 'Поиск'],
+            'services_search': [],
+            'pilot_system': 0,
+            't': 0,
+            'systems_and_percent': {},
+            'possible_systems': []
             }
-        res['response']['text'] = 'Здравствуйте Капитан. Введите пожалуйста систему в которой находите.'
+        res['response']['text'] = 'Здравствуйте Капитан. '
         return
     session = sessionStorage[user_id]
+
     if req['request']['original_utterance'].capitalize() in session['services']:
         session['services'].remove(req['request']['original_utterance'].capitalize())
 
     if req['request']['original_utterance'].lower() == 'поиск':
-        services.remove(pilot_sistem)
-        systems_id = []
-        nearest_sistem = ''
-        nearest_sistem_id = 0
+        session['services_search'].remove(session['pilot_system'])
+        nearest_system_id = 0
         min_range = 10 ** 10
-        pilot_system_id = db_sess.query(System.id).filter(System.name == pilot_sistem).first()[0]
-        pilot_system_cord = db_sess.query(System.cord_x, System.cord_y, System.cord_z).filter(System.name == pilot_sistem).first()
-        search = ''
-        for i in services:
+        pilot_system_id = db_sess.query(System.id).filter(System.name == session['pilot_system']).first()[0]
+        pilot_system_cord = db_sess.query(System.cord_x, System.cord_y,
+                                          System.cord_z).filter(System.name == session['pilot_system']).first()
+        search = []
+        for i in session['services_search']:
             if i == 'заправка':
-                search += '2'
+                search.append('2')
             if i == 'ремонт':
-                search += '4'
+                search.append('4')
             if i == 'рынок':
-                search += '1'
+                search.append('1')
             if i == 'пополнение боезапаса':
-                search += '3'
+                search.append('3')
+        search.sort()
+        search = ''.join(search)
         if db_sess.query(Station.name).filter(Station.system_id == pilot_system_id, Station.services.like(f'%{search}%')).first():
-            station_name = db_sess.query(Station.name).filter(Station.id == pilot_system_id,
+            station_name = db_sess.query(Station.name).filter(Station.system_id == pilot_system_id,
                                                               Station.services.like(f'%{search}%')).first()
-            res['response']['text'] = f'Нужная вам станция под названием {station_name[0]} находится в системе {pilot_sistem}'
+            res['response']['text'] = f'Нужная вам станция под названием {station_name[0]} находится в той же ' \
+                                      f'системе,что и вы.'
+
             res['response']['end_session'] = True
             return
         else:
@@ -91,48 +97,68 @@ def handle_dialog(req, res):
                          (pilot_system_cord[2] - system_cords[2]) ** 2) ** 0.5)
                 if range < min_range:
                     min_range = range
-                    nearest_sistem_id = id[0]
-            nearest_sistem = db_sess.query(System.name).filter(System.id == nearest_sistem_id).first()[0]
-            station_name = db_sess.query(Station.name).filter(Station.system_id == nearest_sistem_id,
+                    nearest_system_id = id[0]
+            nearest_system = db_sess.query(System.name).filter(System.id == nearest_system_id).first()[0]
+            station_name = db_sess.query(Station.name).filter(Station.system_id == nearest_system_id,
                                                               Station.services.like(f'%{search}%')).first()[0]
             res['response'][
-                'text'] = f'Нужная вам станция под названием {station_name} находится в системе {nearest_sistem} ' \
+                'text'] = f'Нужная вам станция под названием {station_name} находится в системе {nearest_system} ' \
                           f'на растояние в {min_range} световы лет.'
             res['response']['end_session'] = True
             return
 
-    if pilot_sistem == 0:
-        pilot_sistem = req['request']['original_utterance'].lower()
-    if db_sess.query(System.id).filter(System.name.like(f'%{pilot_sistem}%')).first():
-        if t == 1:
+    if session['pilot_system'] == 0:
+        session['pilot_system'] = req['request']['original_utterance'].lower()
+    if db_sess.query(System.id).filter(System.name == session["pilot_system"]).first():
+        if session['t'] == 1:
             res['response']['text'] = 'Что-нибудь ещё?'
-            res['response']['buttons'] = get_suggests(user_id)
-            services.append(req['request']['original_utterance'].lower())
+            res['response']['buttons'] = get_suggests(user_id, 'serv')
+            session['services_search'].append(req['request']['original_utterance'].lower())
             return
-        if t == 0:
+        if session['t'] == 0:
             res['response']['text'] = 'Пожалуйтса выберите услуги.'
-            res['response']['buttons'] = get_suggests(user_id)
-            t = 1
-            services.append(req['request']['original_utterance'].lower())
+            res['response']['buttons'] = get_suggests(user_id, 'serv')
+            session['t'] = 1
+            session['services_search'].append(req['request']['original_utterance'].lower())
             return
 
     else:
-        pilot_sistem = 0
-        res['response']['text'] = 'Извините ,но такой системы нет в базе'
+        res['response']['text'] = 'Извините ,но такой системы нет в базе.'
+        res['response']['text'] = 'Возможно вы имели в виду что-то из этого.'
+        all_systems = db_sess.query(System.name).all()
+        for system in all_systems:
+            session['systems_and_percent'][system[0]] = jaro_winkler(session['pilot_system'], system[0])
+        sorted_values = sorted(session['systems_and_percent'].values(), reverse=True)  # Sort the values
+        sorted_dict = {}
+        for i in sorted_values:
+            for k in session['systems_and_percent'].keys():
+                if session['systems_and_percent'][k] == i:
+                    sorted_dict[k] = session['systems_and_percent'][k]
+                    break
+        for k, v in sorted_dict.items():
+            if len(session['possible_systems']) != 5:
+                session['possible_systems'].append(k)
+            else:
+                break
+        res['response']['buttons'] = get_suggests(user_id, 'syst')
+        session['pilot_system'] = 0
+        return
 
 
-def get_suggests(user_id):
-    session = sessionStorage[user_id]
-    suggests = [
-        {'title': suggest, 'hide': True}
-        for suggest in session['services']
-    ]
-
+def get_suggests(user_id, type):
+    if type == 'serv':
+        session = sessionStorage[user_id]
+        suggests = [
+            {'title': suggest, 'hide': True}
+            for suggest in session['services']
+        ]
+    elif type == 'syst':
+        session = sessionStorage[user_id]
+        suggests = [
+            {'title': suggest, 'hide': True}
+            for suggest in session['possible_systems']
+        ]
     return suggests
-
-
-def get_picture(user_id):
-    pass
 
 
 if __name__ == '__main__':
